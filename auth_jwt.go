@@ -101,6 +101,12 @@ type GinJWTMiddleware struct {
 
 	// Public key
 	pubKey *rsa.PublicKey
+
+	// Optionally return the token as a cookie
+	SendCookie bool
+
+	// Allow insecure cookies for development over http
+	SecureCookie bool
 }
 
 var (
@@ -382,6 +388,20 @@ func (mw *GinJWTMiddleware) LoginHandler(c *gin.Context) {
 		return
 	}
 
+	// set cookie
+	if mw.SendCookie {
+		maxage := int(expire.Unix() - time.Now().Unix())
+		c.SetCookie(
+			"JWTToken",
+			tokenString,
+			maxage,
+			"/",
+			"",
+			mw.SecureCookie,
+			true,
+		)
+	}
+
 	mw.LoginResponse(c, http.StatusOK, tokenString, expire)
 }
 
@@ -429,17 +449,21 @@ func (mw *GinJWTMiddleware) RefreshHandler(c *gin.Context) {
 		return
 	}
 
-	mw.RefreshResponse(c, http.StatusOK, tokenString, expire)
-}
-
-// ExtractClaims help to extract the JWT claims
-func ExtractClaims(c *gin.Context) jwt.MapClaims {
-	claims, exists := c.Get("JWT_PAYLOAD")
-	if !exists {
-		return make(jwt.MapClaims)
+	// set cookie
+	if mw.SendCookie {
+		maxage := int(expire.Unix() - time.Now().Unix())
+		c.SetCookie(
+			"JWTToken",
+			tokenString,
+			maxage,
+			"/",
+			"",
+			mw.SecureCookie,
+			true,
+		)
 	}
 
-	return claims.(jwt.MapClaims)
+	mw.RefreshResponse(c, http.StatusOK, tokenString, expire)
 }
 
 // TokenGenerator method that clients can use to get a jwt token.
@@ -518,18 +542,17 @@ func (mw *GinJWTMiddleware) parseToken(c *gin.Context) (*jwt.Token, error) {
 		return nil, err
 	}
 
-	//Gets the token string requested by the user and gives it to the context.
-	//I may store the last valid token in the cache,
-	//and when the token is refreshed, I can invalidate the remaining token (probably not expired).
-	c.Set("tokenString", token)
-
-	return jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
-		if jwt.GetSigningMethod(mw.SigningAlgorithm) != token.Method {
+	return jwt.Parse(token, func(t *jwt.Token) (interface{}, error) {
+		if jwt.GetSigningMethod(mw.SigningAlgorithm) != t.Method {
 			return nil, ErrInvalidSigningAlgorithm
 		}
 		if mw.usingPublicKeyAlgo() {
 			return mw.pubKey, nil
 		}
+
+		// save token string if vaild
+		c.Set("JWT_TOKEN", token)
+
 		return mw.Key, nil
 	})
 }
@@ -544,4 +567,24 @@ func (mw *GinJWTMiddleware) unauthorized(c *gin.Context, code int, message strin
 	c.Abort()
 
 	mw.Unauthorized(c, code, message)
+}
+
+// ExtractClaims help to extract the JWT claims
+func ExtractClaims(c *gin.Context) jwt.MapClaims {
+	claims, exists := c.Get("JWT_PAYLOAD")
+	if !exists {
+		return make(jwt.MapClaims)
+	}
+
+	return claims.(jwt.MapClaims)
+}
+
+// GetToken help to get the JWT token string
+func GetToken(c *gin.Context) string {
+	token, exists := c.Get("JWT_TOKEN")
+	if !exists {
+		return ""
+	}
+
+	return token.(string)
 }
